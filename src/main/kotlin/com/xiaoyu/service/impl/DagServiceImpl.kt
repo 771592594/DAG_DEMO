@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.xiaoyu.domain.DagGraph
 import com.xiaoyu.domain.DagInstance
 import com.xiaoyu.domain.DagNodeInstance
+import com.xiaoyu.domain.DagStatus
 import com.xiaoyu.domain.DagStatus.*
 import com.xiaoyu.entity.DagInstanceDO
 import com.xiaoyu.entity.DagNodeInstanceDO
@@ -14,6 +15,8 @@ import com.xiaoyu.repo.DagInstanceRepo
 import com.xiaoyu.repo.DagNodeInstanceRepo
 import com.xiaoyu.service.DagService
 import jakarta.annotation.Resource
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.data.domain.Example
@@ -63,26 +66,49 @@ class DagServiceImpl : DagService {
     }
 
     override fun execute(dagGraph: DagGraph) {
+        // todo: redis lock to avid concurrent invoke
         val dagInstanceId = dagGraph.dagInstanceId!!
+        val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
+        dagInstanceDO.status = PROCESSING.name
+        dagInstanceRepo.save(dagInstanceDO)
+
         val unfinishedDagNodeInstance = findUnfinishedDagNodeInstanceBy(dagInstanceId)
-        for (dagNodeInstance in unfinishedDagNodeInstance) {
-            val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
-            val processResult = processor.process(dagNodeInstance.context)
-            try {
-                updateDagProcess(dagNodeInstance, processResult, dagGraph.nodeId2Children())
-            } catch (e: Exception) {
-                log.error(
-                    "execute dagNodeInstance fail: instanceId={}, nodeId={}",
-                    dagInstanceId,
-                    dagNodeInstance.nodeId,
-                    e
-                )
-                continue
+        runBlocking {
+            for (dagNodeInstance in unfinishedDagNodeInstance) {
+                launch {
+                    val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
+                    val processResult = processor.process(dagNodeInstance.context)
+                    updateDagNodeInstanceProcess(dagNodeInstance, processResult, dagGraph.nodeId2Children())
+                }
+            }
+        }
+        updateDagInstanceProcess(dagInstanceId)
+    }
+
+    private fun updateDagInstanceProcess(dagInstanceId: String) {
+        transactionTemplate.execute {
+            val dagInstanceDO = dagInstanceRepo.findWithLockByInstanceId(dagInstanceId)
+            if (dagInstanceDO.status == PROCESSING.name) {
+                val dagNodeInstanceDOList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
+                val nodeStatusSet = dagNodeInstanceDOList.asSequence()
+                    .map { DagStatus.valueOf(it.status!!) }
+                    .toSet()
+                var newDagInstanceStatus = PROCESSING
+                if (FAIL in nodeStatusSet) {
+                    newDagInstanceStatus = FAIL
+                }
+                if (dagInstanceDO.nodeCount == dagNodeInstanceDOList.size && nodeStatusSet == setOf(SUCCEEDED)) {
+                    newDagInstanceStatus = SUCCEEDED
+                }
+                dagInstanceDO.status = newDagInstanceStatus.name
+                dagInstanceRepo.save(dagInstanceDO)
+            } else {
+                // do nothing
             }
         }
     }
 
-    private fun updateDagProcess(
+    private fun updateDagNodeInstanceProcess(
         dagNodeInstance: DagNodeInstance,
         processResult: ProcessResult,
         nodeId2Children: MutableMap<Int, MutableList<DagNodeInstance>>
@@ -91,35 +117,23 @@ class DagServiceImpl : DagService {
         val nodeId: Int = dagNodeInstance.nodeId!!
         val nodeStatus = processResult.nodeStatus
         val errorMessage = processResult.errorMessage
-
-        val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
-        val dagNodeInstanceDO = dagNodeInstanceRepo.findByDagInstanceIdAndNodeId(dagInstanceId, nodeId)
         var readyChildren = emptyList<DagNodeInstanceDO>()
 
-        // 只有当DAG所有节点都执行成功, DAG任务才算执行完成
-        if (nodeStatus == SUCCEEDED) {
-            val existNodeList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
-            existNodeList.find { it.nodeId == nodeId }.also { it!!.status = SUCCEEDED.name }
-            readyChildren = findReadyChildren(existNodeList, nodeId, nodeId2Children)
-
-            if (existNodeList.size == dagInstanceDO.nodeCount && existNodeList.all { it.status == SUCCEEDED.name }) {
-                dagInstanceDO.status = SUCCEEDED.name
-            } else {
-                dagInstanceDO.status = PROCESSING.name
+        val dagNodeInstanceDO = dagNodeInstanceRepo.findByDagInstanceIdAndNodeId(dagInstanceId, nodeId)
+        dagNodeInstanceDO.status = nodeStatus.name
+        when (nodeStatus) {
+            FAIL -> dagNodeInstance.context["errorMessage"] = errorMessage
+            SUCCEEDED -> {
+                val existNodeList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
+                existNodeList.find { it.nodeId == nodeId }.also { it!!.status = SUCCEEDED.name }
+                readyChildren = findReadyChildren(existNodeList, nodeId, nodeId2Children)
             }
-        } else {
-            dagInstanceDO.status = nodeStatus.name
+            else -> {}
         }
 
-        dagNodeInstanceDO.status = nodeStatus.name
-        dagNodeInstance.context["errorMessage"] = errorMessage
-
         transactionTemplate.execute {
-            dagInstanceRepo.save(dagInstanceDO)
             dagNodeInstanceRepo.save(dagNodeInstanceDO)
-            if (readyChildren.isNotEmpty()) {
-                dagNodeInstanceRepo.saveAll(readyChildren)
-            }
+            dagNodeInstanceRepo.saveAll(readyChildren)
         }
     }
 
@@ -130,7 +144,7 @@ class DagServiceImpl : DagService {
     ): List<DagNodeInstanceDO> {
         val groupByIfSucceed = existNode.groupBy({ it.status == SUCCEEDED.name }) { it.nodeId }
         val succeedNodeIdList = groupByIfSucceed.getOrDefault(true, listOf())
-        val children = nodeId2Children.getOrDefault(nodeId, mutableListOf())
+        val children = nodeId2Children.getOrDefault(nodeId, listOf())
         return children.asSequence()
             .filter { succeedNodeIdList.containsAll(it.parentNodeId) }
             .map(this::buildDagNodeInstanceDO)
