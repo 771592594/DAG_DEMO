@@ -68,6 +68,7 @@ class DagServiceImpl : DagService {
     override fun execute(dagGraph: DagGraph) {
         // todo: redis lock to avid concurrent invoke
         val dagInstanceId = dagGraph.dagInstanceId!!
+        val nodeId2Children = dagGraph.nodeId2Children()
         val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
         dagInstanceDO.status = PROCESSING.name
         dagInstanceRepo.save(dagInstanceDO)
@@ -78,7 +79,7 @@ class DagServiceImpl : DagService {
                 launch {
                     val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
                     val processResult = processor.process(dagNodeInstance.context)
-                    updateDagNodeInstanceProcess(dagNodeInstance, processResult, dagGraph.nodeId2Children())
+                    updateDagNodeInstanceProcess(dagNodeInstance, processResult, nodeId2Children)
                 }
             }
         }
@@ -87,6 +88,7 @@ class DagServiceImpl : DagService {
 
     private fun updateDagInstanceProcess(dagInstanceId: String) {
         transactionTemplate.execute {
+            // lock for update to avoid concurrent query
             val dagInstanceDO = dagInstanceRepo.findWithLockByInstanceId(dagInstanceId)
             if (dagInstanceDO.status == PROCESSING.name) {
                 val dagNodeInstanceDOList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
@@ -117,24 +119,15 @@ class DagServiceImpl : DagService {
         val nodeId: Int = dagNodeInstance.nodeId!!
         val nodeStatus = processResult.nodeStatus
         val errorMessage = processResult.errorMessage
-        var readyChildren = emptyList<DagNodeInstanceDO>()
 
         val dagNodeInstanceDO = dagNodeInstanceRepo.findByDagInstanceIdAndNodeId(dagInstanceId, nodeId)
         dagNodeInstanceDO.status = nodeStatus.name
-        when (nodeStatus) {
-            FAIL -> dagNodeInstance.context["errorMessage"] = errorMessage
-            SUCCEEDED -> {
-                val existNodeList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
-                existNodeList.find { it.nodeId == nodeId }.also { it!!.status = SUCCEEDED.name }
-                readyChildren = findReadyChildren(existNodeList, nodeId, nodeId2Children)
-            }
-            else -> {}
-        }
+        dagNodeInstance.context["errorMessage"] = errorMessage
+        dagNodeInstanceRepo.save(dagNodeInstanceDO)
 
-        transactionTemplate.execute {
-            dagNodeInstanceRepo.save(dagNodeInstanceDO)
-            dagNodeInstanceRepo.saveAll(readyChildren)
-        }
+        val existNodeList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
+        val readyChildren = findReadyChildren(existNodeList, nodeId, nodeId2Children)
+        dagNodeInstanceRepo.saveAll(readyChildren)
     }
 
     private fun findReadyChildren(
