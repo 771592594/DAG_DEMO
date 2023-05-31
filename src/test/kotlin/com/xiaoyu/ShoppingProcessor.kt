@@ -1,6 +1,8 @@
-package com.xiaoyu.process
+package com.xiaoyu
 
 import com.xiaoyu.domain.DagStatus
+import com.xiaoyu.process.AbstractProcessor
+import com.xiaoyu.process.ProcessResult
 import org.springframework.stereotype.Component
 
 @Component
