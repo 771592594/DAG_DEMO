@@ -49,6 +49,8 @@ class DagServiceImpl : DagService {
 
         val dagInstanceDO = DagInstanceDO(
             id = null,
+            createTime = Date(),
+            modifiedTime = Date(),
             instanceId = dagInstanceId,
             status = INIT.name,
             nodeCount = dagNodeInstanceList.size,
@@ -56,6 +58,7 @@ class DagServiceImpl : DagService {
         )
         val dagNodeInstanceDOList = dagNodeInstanceList.asSequence()
             .filter { it.parentNodeId.isEmpty() }
+            .onEach { it.createTime = Date() }
             .map(this::buildDagNodeInstanceDO)
             .toList()
         transactionTemplate.execute {
@@ -71,6 +74,7 @@ class DagServiceImpl : DagService {
         val nodeId2Children = dagGraph.nodeId2Children()
         val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
         dagInstanceDO.status = PROCESSING.name
+        dagInstanceDO.modifiedTime = Date()
         dagInstanceRepo.save(dagInstanceDO)
 
         val unfinishedDagNodeInstance = findUnfinishedDagNodeInstanceBy(dagInstanceId)
@@ -103,6 +107,7 @@ class DagServiceImpl : DagService {
                     newDagInstanceStatus = SUCCEEDED
                 }
                 dagInstanceDO.status = newDagInstanceStatus.name
+                dagInstanceDO.modifiedTime = Date()
                 dagInstanceRepo.save(dagInstanceDO)
             } else {
                 // do nothing
@@ -139,6 +144,7 @@ class DagServiceImpl : DagService {
         val succeedNodeIdList = groupByIfSucceed.getOrDefault(true, listOf())
         val children = nodeId2Children.getOrDefault(nodeId, listOf())
         return children.asSequence()
+            .onEach { it.createTime = Date() }
             .filter { succeedNodeIdList.containsAll(it.parentNodeId) }
             .map(this::buildDagNodeInstanceDO)
             .toList()
@@ -171,6 +177,8 @@ class DagServiceImpl : DagService {
     private fun buildDagInstance(dagInstanceDO: DagInstanceDO): DagInstance {
         return dagInstanceDO.let {
             DagInstance(
+                createTime = it.createTime,
+                modifiedTime = it.modifiedTime,
                 instanceId = it.instanceId,
                 status = it.status,
                 nodeCount = it.nodeCount,
@@ -182,6 +190,8 @@ class DagServiceImpl : DagService {
     private fun buildDagNodeInstance(dagNodeInstanceDO: DagNodeInstanceDO): DagNodeInstance {
         return dagNodeInstanceDO.let {
             return@let DagNodeInstance(
+                createTime = it.createTime,
+                modifiedTime = it.modifiedTime,
                 dagInstanceId = it.dagInstanceId,
                 processor = it.processor,
                 nodeId = it.nodeId!!,
@@ -196,6 +206,8 @@ class DagServiceImpl : DagService {
         return dagNodeInstance.let {
             return@let DagNodeInstanceDO(
                 id = null,
+                createTime = it.createTime,
+                modifiedTime = Date(),
                 dagInstanceId = it.dagInstanceId,
                 processor = it.processor,
                 parentNodeId = objectMapper.writeValueAsString(it.parentNodeId),
