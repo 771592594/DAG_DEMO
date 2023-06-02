@@ -2,10 +2,7 @@ package com.xiaoyu.service.impl
 
 import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.xiaoyu.domain.DagGraph
-import com.xiaoyu.domain.DagInstance
-import com.xiaoyu.domain.DagNodeInstance
-import com.xiaoyu.domain.DagStatus
+import com.xiaoyu.domain.*
 import com.xiaoyu.domain.DagStatus.*
 import com.xiaoyu.entity.DagInstanceDO
 import com.xiaoyu.entity.DagNodeInstanceDO
@@ -15,6 +12,7 @@ import com.xiaoyu.process.ProcessorRegistry
 import com.xiaoyu.repo.DagInstanceRepo
 import com.xiaoyu.repo.DagNodeInstanceRepo
 import com.xiaoyu.service.DagService
+import com.xiaoyu.service.ResourceLockService
 import jakarta.annotation.Resource
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -29,6 +27,8 @@ import java.util.*
 @Service
 class DagServiceImpl : DagService {
 
+    @Resource
+    private lateinit var resourceLockService: ResourceLockService
     @Resource
     private lateinit var dagInstanceRepo: DagInstanceRepo
     @Resource
@@ -70,7 +70,15 @@ class DagServiceImpl : DagService {
     }
 
     override fun execute(dagGraph: DagGraph) {
-        // todo: lock to avid concurrent invoke
+        resourceLockService.tryLockAndExecute(
+            resourceType = ResourceTypeEnum.DAG_INSTANCE.name,
+            resourceId = dagGraph.dagInstanceId!!
+        ) {
+            doExecute(dagGraph)
+        }
+    }
+
+    private fun doExecute(dagGraph: DagGraph) {
         val dagInstanceId = dagGraph.dagInstanceId!!
         val nodeId2Children = dagGraph.nodeId2Children()
         val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
@@ -84,7 +92,7 @@ class DagServiceImpl : DagService {
                 launch {
                     val context = dagNodeInstance.context
                     val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
-                    val processResult = when (DagStatus.valueOf(dagNodeInstance.status!!)) {
+                    val processResult = when (valueOf(dagNodeInstance.status!!)) {
                         INIT -> processor.process(context)
                         PROCESSING -> {
                             when (processor) {
@@ -99,7 +107,6 @@ class DagServiceImpl : DagService {
             }
         }
         updateDagInstanceProcess(dagInstanceId)
-        // todo: unlock
     }
 
     private fun updateDagInstanceProcess(dagInstanceId: String) {

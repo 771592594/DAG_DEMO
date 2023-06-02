@@ -12,7 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import java.util.concurrent.atomic.AtomicInteger
 
 @SpringBootTest
-class DagDemoApplicationTests {
+class DagServiceTests {
 
     @Resource
     private lateinit var dagService: DagService
