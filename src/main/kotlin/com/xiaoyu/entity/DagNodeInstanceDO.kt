@@ -43,15 +43,22 @@ data class DagNodeInstanceDO(
     @Column(name = "context", nullable = false, columnDefinition = "TEXT COMMENT '节点上下文'")
     var context: String?
 ){
-    constructor() : this(
+    constructor(
+        dagInstanceId: String?,
+        processor: String?,
+        parentNodeId: String?,
+        nodeId: Int?,
+        status: String?,
+        context: String?
+    ) : this(
         id = null,
         createTime = null,
         modifiedTime = null,
-        dagInstanceId = null,
-        processor = null,
-        nodeId = null,
-        parentNodeId = null,
-        status = null,
-        context = null
+        dagInstanceId = dagInstanceId,
+        processor = processor,
+        parentNodeId = parentNodeId,
+        nodeId = nodeId,
+        status = status,
+        context = context
     )
 }

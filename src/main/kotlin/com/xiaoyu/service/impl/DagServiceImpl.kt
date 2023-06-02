@@ -208,9 +208,6 @@ class DagServiceImpl : DagService {
     private fun buildDagNodeInstanceDO(dagNodeInstance: DagNodeInstance): DagNodeInstanceDO {
         return dagNodeInstance.let {
             return@let DagNodeInstanceDO(
-                id = null,
-                createTime = it.createTime,
-                modifiedTime = Date(),
                 dagInstanceId = it.dagInstanceId,
                 processor = it.processor,
                 parentNodeId = objectMapper.writeValueAsString(it.parentNodeId),

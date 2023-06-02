@@ -12,17 +12,6 @@ class DagNodeInstance(
     var status: String?,
     var context: MutableMap<String, Any?>
 ){
-    constructor() : this(
-        createTime = null,
-        modifiedTime = null,
-        dagInstanceId = null,
-        processor = null,
-        nodeId = null,
-        parentNodeId = mutableListOf(),
-        status = null,
-        context = mutableMapOf()
-    )
-
     constructor(processor: String?, nodeId: Int, parentNodeId: List<Int>, context: MutableMap<String, Any?>) : this(
         createTime = null,
         modifiedTime = null,
