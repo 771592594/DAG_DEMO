@@ -9,6 +9,7 @@ import com.xiaoyu.domain.DagStatus
 import com.xiaoyu.domain.DagStatus.*
 import com.xiaoyu.entity.DagInstanceDO
 import com.xiaoyu.entity.DagNodeInstanceDO
+import com.xiaoyu.process.AbstractAsyncProcessor
 import com.xiaoyu.process.ProcessResult
 import com.xiaoyu.process.ProcessorRegistry
 import com.xiaoyu.repo.DagInstanceRepo
@@ -69,7 +70,7 @@ class DagServiceImpl : DagService {
     }
 
     override fun execute(dagGraph: DagGraph) {
-        // todo: redis lock to avid concurrent invoke
+        // todo: lock to avid concurrent invoke
         val dagInstanceId = dagGraph.dagInstanceId!!
         val nodeId2Children = dagGraph.nodeId2Children()
         val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
@@ -81,38 +82,40 @@ class DagServiceImpl : DagService {
         runBlocking {
             for (dagNodeInstance in unfinishedDagNodeInstance) {
                 launch {
+                    val context = dagNodeInstance.context
                     val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
-                    val processResult = processor.process(dagNodeInstance.context)
+                    val processResult = when (DagStatus.valueOf(dagNodeInstance.status!!)) {
+                        INIT -> processor.process(context)
+                        PROCESSING -> {
+                            when (processor) {
+                                is AbstractAsyncProcessor -> processor.queryResult(context)
+                                else -> throw RuntimeException("unexpected case")
+                            }
+                        }
+                        else -> throw RuntimeException("unexpected case")
+                    }
                     updateDagNodeInstanceProcess(dagNodeInstance, processResult, nodeId2Children)
                 }
             }
         }
         updateDagInstanceProcess(dagInstanceId)
+        // todo: unlock
     }
 
     private fun updateDagInstanceProcess(dagInstanceId: String) {
-        transactionTemplate.execute {
-            // lock for update to avoid concurrent query
-            val dagInstanceDO = dagInstanceRepo.findWithLockByInstanceId(dagInstanceId)
-            if (dagInstanceDO.status == PROCESSING.name) {
-                val dagNodeInstanceDOList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
-                val nodeStatusSet = dagNodeInstanceDOList.asSequence()
-                    .map { DagStatus.valueOf(it.status!!) }
-                    .toSet()
-                var newDagInstanceStatus = PROCESSING
-                if (FAIL in nodeStatusSet) {
-                    newDagInstanceStatus = FAIL
-                }
-                if (dagInstanceDO.nodeCount == dagNodeInstanceDOList.size && nodeStatusSet == setOf(SUCCEEDED)) {
-                    newDagInstanceStatus = SUCCEEDED
-                }
-                dagInstanceDO.status = newDagInstanceStatus.name
-                dagInstanceDO.modifiedTime = Date()
-                dagInstanceRepo.save(dagInstanceDO)
-            } else {
-                // do nothing
-            }
+        val dagNodeInstanceDOList = dagNodeInstanceRepo.findByDagInstanceId(dagInstanceId)
+        val nodeStatusSet = dagNodeInstanceDOList.asSequence()
+            .map { DagStatus.valueOf(it.status!!) }
+            .toSet()
+        val dagInstanceDO = dagInstanceRepo.findByInstanceId(dagInstanceId)
+        val newDagInstanceStatus = when {
+            FAIL in nodeStatusSet -> FAIL
+            setOf(SUCCEEDED) == nodeStatusSet && dagInstanceDO.nodeCount == dagNodeInstanceDOList.size -> SUCCEEDED
+            else -> PROCESSING
         }
+        dagInstanceDO.status = newDagInstanceStatus.name
+        dagInstanceDO.modifiedTime = Date()
+        dagInstanceRepo.save(dagInstanceDO)
     }
 
     private fun updateDagNodeInstanceProcess(

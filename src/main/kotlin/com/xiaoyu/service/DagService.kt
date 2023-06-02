@@ -15,7 +15,7 @@ interface DagService {
     fun save(dagGraph: DagGraph): String
 
     /**
-     * 执行DAG图的流程
+     * 执行DAG图
      *
      * @param dagGraph DAG图
      */

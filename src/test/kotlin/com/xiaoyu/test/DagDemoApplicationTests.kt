@@ -1,4 +1,4 @@
-package com.xiaoyu
+package com.xiaoyu.test
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.xiaoyu.domain.DagGraph
