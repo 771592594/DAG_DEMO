@@ -87,20 +87,29 @@ class DagServiceImpl : DagService {
         dagInstanceRepo.save(dagInstanceDO)
 
         val unfinishedDagNodeInstance = findUnfinishedDagNodeInstanceBy(dagInstanceId)
+        var processResult: ProcessResult
         runBlocking {
             for (dagNodeInstance in unfinishedDagNodeInstance) {
                 launch {
                     val context = dagNodeInstance.context
-                    val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
-                    val processResult = when (valueOf(dagNodeInstance.status!!)) {
-                        INIT -> processor.process(context)
-                        PROCESSING -> {
-                            when (processor) {
-                                is AbstractAsyncProcessor -> processor.queryResult(context)
-                                else -> throw RuntimeException("unexpected case")
+                    processResult = try {
+                        val processor = ProcessorRegistry.findBy(dagNodeInstance.processor!!)
+                        when (valueOf(dagNodeInstance.status!!)) {
+                            INIT -> processor.process(context)
+                            PROCESSING -> {
+                                when (processor) {
+                                    is AbstractAsyncProcessor -> processor.queryResult(context)
+                                    else -> throw RuntimeException("unexpected case")
+                                }
                             }
+                            else -> throw RuntimeException("unexpected case")
                         }
-                        else -> throw RuntimeException("unexpected case")
+                    } catch (e: Exception) {
+                        log.error(
+                            "dag node execute failed: dagInstanceId={}, nodeId={}, errorMessage={}",
+                            dagInstanceId, dagNodeInstance.nodeId, e.message
+                        )
+                        ProcessResult(FAIL, e.message)
                     }
                     updateDagNodeInstanceProcess(dagNodeInstance, processResult, nodeId2Children)
                 }

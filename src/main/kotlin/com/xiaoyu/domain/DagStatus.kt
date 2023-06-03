@@ -5,6 +5,5 @@ enum class DagStatus {
     PROCESSING,
     SUCCEEDED,
     FAIL,
-    CANCEL,
     ;
 }

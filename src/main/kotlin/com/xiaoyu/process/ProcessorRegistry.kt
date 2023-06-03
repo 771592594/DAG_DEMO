@@ -1,5 +1,7 @@
 package com.xiaoyu.process
 
+import java.util.*
+
 object ProcessorRegistry {
 
     private val registry: MutableMap<String, AbstractProcessor> = mutableMapOf()
@@ -15,6 +17,7 @@ object ProcessorRegistry {
     }
 
     fun findBy(processorName: String): AbstractProcessor {
-        return registry[processorName]!!
+        return Optional.ofNullable(registry[processorName])
+            .orElseThrow { RuntimeException("can not find processor $processorName") }
     }
 }
